@@ -1,5 +1,7 @@
 # RipWatch
 
+> Important - All movies and TV shows I have ripped are for personal use only and collected from official copies of the media that I have purchased. I do not support piracy in any way and this tool is for personal use only. Please do not use this tool to rip media you do not own.
+
 Watch a folder for DVD rips, transcode them for Jellyfin, name them correctly, and copy them to your media server — automatically.
 
 RipWatch is a two-file tool (`ripwatch.sh` + `ripwatch.py`, standard-library Python only) that sits between your ripping software (MakeMKV, etc.) and your Jellyfin library. You rip discs into a watched folder; RipWatch does everything else:
