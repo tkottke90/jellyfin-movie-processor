@@ -110,6 +110,8 @@ The ffmpeg settings mirror a Handbrake-style 1080p30 preset: MP4 container with 
 
 **Overwrites are deliberate.** If an output file already exists on the share (say, you re-ripped episode 3), the new copy replaces it.
 
+**Movies are bare files.** Unlike shows, movies are uploaded directly into the output root with no per-movie folder (e.g. `Movies/The Fifth Element (1997) [tmdbid-18].mp4`).
+
 **Movies with multiple files.** A second, different MKV dropped into a movie folder becomes a Jellyfin "additional version" (`Movie (1997) [tmdbid-18] - <ripname>.mp4`) instead of overwriting the first.
 
 **One watcher per folder.** A `.ripwatch.lock` file prevents accidentally starting two instances on the same folder. Multiple RipWatch instances on *different* folders are fine — e.g. one per show while you rip several box sets.

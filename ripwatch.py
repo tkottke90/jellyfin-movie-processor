@@ -303,9 +303,10 @@ def show_paths(cfg, episode):
 
 
 def movie_paths(cfg, label=None):
-    movie_dir = base_title(cfg, with_tag=True)
-    fname = movie_dir + (" - {}".format(label) if label else "") + ".mp4"
-    return movie_dir, fname
+    # Movies are stored as bare files directly in the library root (no folder).
+    fname = (base_title(cfg, with_tag=True)
+             + (" - {}".format(label) if label else "") + ".mp4")
+    return "", fname
 
 
 # ---------------------------------------------------------------------------
