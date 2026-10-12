@@ -37,7 +37,7 @@ chmod +x ripwatch.sh          # first time only
 ./ripwatch.sh --input ~/rips/firefly-s1 --output "/Volumes/media/TV Shows"
 
 # 3. Rip discs into ~/rips/firefly-s1 — episodes are numbered in the
-#    order the files arrive. Ctrl-C to stop; restarting resumes cleanly.
+#    MakeMKV title order (disc, then _tNN). Ctrl-C to stop; restarting resumes cleanly.
 ```
 
 For a movie, the config is just:
@@ -74,6 +74,7 @@ The config uses simple flat `key: value` lines (a small YAML subset — no nesti
 | `season` | shows only | Season number. Its presence is what makes RipWatch treat the folder as a show. |
 | `next_episode` | no (default 1) | Episode number given to the next new file. |
 | `type` | no | `show` or `movie`; normally inferred from `season`. |
+| `titles_file` | no | Shows only. Path (relative to the input folder) of a text file with one episode title per line; line N is episode N (blank lines and `#` comments skipped). Files become `Show (Year) S01E03 - Title.mp4` and a matching `.nfo` with the title is uploaded beside each one. |
 
 You can edit the config while RipWatch is running — it reloads automatically. The usual multi-disc flow is: rip disc 1's episodes, let them process, then rip disc 2; numbering continues automatically. When you finish a season, change `season: 1` to `season: 2` and numbering restarts at episode 1.
 
@@ -102,7 +103,7 @@ The ffmpeg settings mirror a Handbrake-style 1080p30 preset: MP4 container with 
 
 ## Behavior details
 
-**Episode numbering is arrival order.** Files get episode numbers in the order they finish copying into the folder, so rip discs in broadcast order. If a rip goes wrong, note that the number was already consumed — set `next_episode` in the config to renumber going forward.
+**Episode numbering follows MakeMKV title order.** Files named `<disc>_tNN.mkv` are numbered by disc name (natural sort), then title number `NN`, so `B1_t00` < `B1_t02` < `B2_t00`. Files that become stable together are numbered as one batch; a batch is held until every file still being ripped has finished, so a title mid-rip delays it. Numbers continue from the highest already assigned, so a title that arrives *after* a later one was numbered gets the next number rather than its sorted position, and discs should still go in broadcast order. Rename your discs in MakeMKV if alphabetical order isn't disc order. Files that don't match the `_tNN` pattern sort by name. If a rip goes wrong, note that the number was already consumed — set `next_episode` in the config to renumber going forward.
 
 **Everything is resumable.** Ctrl-C (or a crash) at any point is safe: on restart, files that hadn't finished transcoding start over from the still-present MKV, and files that had finished transcoding (source already deleted) resume at the upload step. Episode numbers are never reused.
 
@@ -123,5 +124,5 @@ The ffmpeg settings mirror a Handbrake-style 1080p30 preset: MP4 container with 
 - *"another ripwatch is already watching"* — a previous run is still alive, or crashed hard; if you're sure nothing is running, delete `.ripwatch.lock` from the input folder.
 - *Output folder errors at startup* — the SMB share probably isn't mounted; mount it and rerun. RipWatch checks writability before doing any work.
 - *A file sat at "stabilizing" forever* — its size kept changing (still ripping) or it's zero bytes. It processes 10 s after the rip completes.
-- *Wrong episode number assigned* — files are numbered by arrival; fix the config's `next_episode`, re-drop the file (the old number stays consumed), and delete the misnamed file from the share.
+- *Wrong episode number assigned* — files are numbered in disc/title order within each batch; fix the config's `next_episode`, re-drop the file (the old number stays consumed), and delete the misnamed file from the share.
 - *Transcode failed* — check the `.ffmpeg.log` file in `work/`; the source MKV is still in the input folder for a retry (delete the errored entry's file and drop it in again).

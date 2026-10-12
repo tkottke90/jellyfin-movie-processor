@@ -41,6 +41,7 @@ import re
 import subprocess
 import sys
 import time
+from xml.sax.saxutils import escape as xml_escape
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -193,7 +194,8 @@ def dump_ledger(files):
 class Config:
     # Alternate spellings people plausibly type; all mean tmdb_id.
     TMDB_ALIASES = ("tmdb_id", "tmdbid", "tmdb", "tmdb-id")
-    KNOWN_KEYS = {"name", "year", "season", "next_episode", "type"} | set(TMDB_ALIASES)
+    KNOWN_KEYS = {"name", "year", "season", "next_episode", "type",
+                  "titles_file"} | set(TMDB_ALIASES)
 
     def __init__(self, data):
         self.warnings = []
@@ -209,6 +211,8 @@ class Config:
                 "the [tmdbid-...] tag and Jellyfin matching may be unreliable")
         self.season = data.get("season")
         self.next_episode = data.get("next_episode", 1)
+        titles_file = data.get("titles_file")
+        self.titles_file = str(titles_file).strip() if titles_file else None
         for key in data:
             if key not in self.KNOWN_KEYS:
                 self.warnings.append(
@@ -279,6 +283,20 @@ class ConfigStore:
         return max(self.cfg.next_episode, (max(assigned) + 1) if assigned else 0)
 
 
+def rip_sort_key(filename):
+    """Order MakeMKV outputs by disc name, then title number: B1_t02.mkv sorts
+    after B1_t01.mkv and before C1_t00.mkv. Digits compare numerically."""
+    stem = os.path.splitext(filename)[0]
+    m = re.match(r"^(.*)_t(\d+)$", stem, re.IGNORECASE)
+    disc, title = (m.group(1), int(m.group(2))) if m else (stem, 0)
+    # ignore a "{-s:SN}" source-title suffix and leading separators from empty
+    # name fields, so "-B2-s02_t01" and "-B2-s10_t03" are the same disc "B2"
+    disc = re.sub(r"[-_ ]s\d+$", "", disc, flags=re.IGNORECASE).lstrip("-_ ")
+    natural = [int(p) if p.isdigit() else p.lower()
+               for p in re.split(r"(\d+)", disc)]
+    return natural, title, filename
+
+
 def sanitize(name):
     cleaned = "".join(c for c in str(name) if c not in RESERVED_CHARS)
     cleaned = re.sub(r"\s+", " ", cleaned).strip().rstrip(".")
@@ -294,12 +312,27 @@ def base_title(cfg, with_tag):
     return base
 
 
-def show_paths(cfg, episode):
+def show_paths(cfg, episode, title=None):
     series_dir = base_title(cfg, with_tag=True)
     season_dir = "Season {:02d}".format(cfg.season)
-    fname = "{} S{:02d}E{:02d}.mp4".format(base_title(cfg, with_tag=False),
-                                           cfg.season, episode)
+    fname = "{} S{:02d}E{:02d}{}.mp4".format(
+        base_title(cfg, with_tag=False), cfg.season, episode,
+        " - " + sanitize(title) if title else "")
     return os.path.join(series_dir, season_dir), fname
+
+
+def write_episode_nfo(path, cfg, episode, title):
+    """Kodi-style episode .nfo, which Jellyfin reads as local metadata."""
+    text = ('<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n'
+            "<episodedetails>\n"
+            "  <title>{}</title>\n"
+            "  <season>{}</season>\n"
+            "  <episode>{}</episode>\n"
+            "</episodedetails>\n").format(xml_escape(title), cfg.season, episode)
+    tmp = path + ".part"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
 
 
 def movie_paths(cfg, label=None):
@@ -463,6 +496,25 @@ class RipWatch:
     def cfg(self):
         return self.store.cfg
 
+    def episode_title(self, episode):
+        """Title for the Nth episode from cfg.titles_file (one per line, blank
+        lines and #-comments skipped), or None if unavailable."""
+        if not self.cfg.titles_file:
+            return None
+        path = os.path.join(self.input_dir, self.cfg.titles_file)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                titles = [ln.strip() for ln in fh
+                          if ln.strip() and not ln.lstrip().startswith("#")]
+        except OSError as exc:
+            self.say("warning: cannot read titles_file: {}".format(exc))
+            return None
+        if 1 <= episode <= len(titles):
+            return titles[episode - 1]
+        self.say("warning: no title for episode {} in {}".format(
+            episode, self.cfg.titles_file))
+        return None
+
     @property
     def files(self):
         return self.store.files
@@ -599,6 +651,7 @@ class RipWatch:
             return
         now = time.monotonic()
         present = set()
+        ready = {}  # stable entries awaiting numbering: name -> size
         for entry in entries:
             if not entry.lower().endswith(".mkv") or entry.startswith("."):
                 continue
@@ -640,7 +693,15 @@ class RipWatch:
                 track["changed_at"] = now
                 rec["size"] = size
             elif size > 0 and now - track["changed_at"] >= self.stable_seconds:
-                self.promote(entry, size)
+                ready[entry] = size
+
+        # Number episodes by MakeMKV title order (<disc>_tNN.mkv), not by
+        # arrival. A batch is released only once every file still being
+        # tracked is stable, so a title that is mid-rip holds the batch back.
+        if ready and all(name in ready or name not in present
+                         for name in self.tracking):
+            for entry in sorted(ready, key=rip_sort_key):
+                self.promote(entry, ready[entry])
 
         for entry in list(self.tracking):
             if entry not in present:
@@ -671,11 +732,13 @@ class RipWatch:
             entry, key))
 
     def promote(self, entry, size):
-        """detected -> queued: assign the output name now, in arrival order."""
+        """detected -> queued: assign the output name now (callers promote a
+        batch in disc/title order)."""
         rec = self.rec(entry)
         if self.cfg.type == "show":
             episode = self.store.next_episode()
-            rel_dir, fname = show_paths(self.cfg, episode)
+            rel_dir, fname = show_paths(self.cfg, episode,
+                                        self.episode_title(episode))
             rec["season"] = self.cfg.season
             rec["episode"] = episode
         else:
@@ -841,6 +904,11 @@ class RipWatch:
             sidecars = self.work_sidecars(rec)
             for sc in sidecars:
                 self.copy_with_progress(sc, os.path.join(dest_dir, os.path.basename(sc)))
+            if self.cfg.type == "show" and rec.get("episode"):
+                title = self.episode_title(rec["episode"])
+                if title:
+                    write_episode_nfo(os.path.splitext(final)[0] + ".nfo",
+                                      self.cfg, rec["episode"], title)
         except OSError as exc:
             rec["status"] = "error"
             rec["error"] = "upload failed: {}".format(exc)
